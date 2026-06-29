@@ -1,7 +1,9 @@
 package com.screenbog.zombiewaves;
 
 import com.screenbog.zombiewaves.commands.CoinsCommand;
+import com.screenbog.zombiewaves.commands.MenuCommand;
 import com.screenbog.zombiewaves.commands.ShopCommand;
+import com.screenbog.zombiewaves.common.menu.ModMenus;
 import com.screenbog.zombiewaves.config.ModConfig;
 import com.screenbog.zombiewaves.integration.ModIntegrations;
 import com.screenbog.zombiewaves.network.ModNetwork;
@@ -34,6 +36,7 @@ public class ZombieWavesMod {
         IEventBus modEventBus = FMLJavaModLoadingContext.get().getModEventBus();
 
         ModItems.register(modEventBus);
+        ModMenus.register(modEventBus);
         ModConfig.register();
 
         modEventBus.addListener(this::commonSetup);
@@ -79,5 +82,6 @@ public class ZombieWavesMod {
     public void onRegisterCommands(RegisterCommandsEvent event) {
         CoinsCommand.register(event.getDispatcher());
         ShopCommand.register(event.getDispatcher());
+        MenuCommand.register(event.getDispatcher());
     }
 }

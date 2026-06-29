@@ -26,6 +26,7 @@ public final class WaveManager {
     private int currentWave = 0;
     private long waveStartTick = 0L;
     private int cooldownTicks = 0;
+    private int intervalOverrideSeconds = -1;
     private final Set<UUID> activeWaveZombies = new HashSet<>();
 
     /** Таймаут волны в тиках (1200 = 60 секунд). */
@@ -90,6 +91,7 @@ public final class WaveManager {
         this.currentWave = 0;
         this.waveStartTick = 0L;
         this.cooldownTicks = 0;
+        this.intervalOverrideSeconds = -1;
     }
 
     private void loadWaveData(ServerLevel level) {
@@ -99,16 +101,84 @@ public final class WaveManager {
         this.state = saved.getState();
         this.waveStartTick = saved.getWaveStartTick();
         this.cooldownTicks = saved.getCooldownTicks();
-        ZombieWavesMod.LOGGER.info("Restored wave state: wave={}, state={}, ticks={}", currentWave, state, tickCounter);
+        this.intervalOverrideSeconds = saved.getIntervalOverrideSeconds();
+        ZombieWavesMod.LOGGER.info(
+                "Restored wave state: wave={}, state={}, ticks={}, interval={}s",
+                currentWave, state, tickCounter, getEffectiveIntervalSeconds()
+        );
     }
 
     private void persistWaveData(ServerLevel level) {
         try {
             WaveSavedData saved = WaveSavedData.get(level);
-            saved.update(currentWave, tickCounter, state, waveStartTick, cooldownTicks);
+            saved.update(currentWave, tickCounter, state, waveStartTick, cooldownTicks, intervalOverrideSeconds);
             saved.setDirty();
         } catch (Exception e) {
             ZombieWavesMod.LOGGER.error("Failed to persist wave data", e);
+        }
+    }
+
+    public int getEffectiveIntervalSeconds() {
+        if (intervalOverrideSeconds > 0) {
+            return intervalOverrideSeconds;
+        }
+        return ModConfig.SERVER.waveIntervalSeconds.get();
+    }
+
+    public int getEffectiveIntervalTicks() {
+        return getEffectiveIntervalSeconds() * 20;
+    }
+
+    public boolean setRuntimeInterval(int seconds) {
+        if (seconds < 60 || seconds > 7200) {
+            return false;
+        }
+        try {
+            intervalOverrideSeconds = seconds;
+            if (server != null) {
+                ServerLevel level = server.getLevel(ServerLevel.OVERWORLD);
+                if (level != null) {
+                    WaveSavedData.get(level).setIntervalOverride(seconds);
+                    persistWaveData(level);
+                }
+            }
+            ZombieWavesMod.LOGGER.info("Wave interval override set to {}s", seconds);
+            return true;
+        } catch (Exception e) {
+            ZombieWavesMod.LOGGER.error("Failed to set runtime interval", e);
+            return false;
+        }
+    }
+
+    public void forceEndCurrentWave() {
+        if (state != WaveState.ACTIVE || server == null) {
+            return;
+        }
+        ServerLevel level = server.getLevel(ServerLevel.OVERWORLD);
+        if (level != null) {
+            endWave(level);
+        }
+    }
+
+    public void skipWave() {
+        if (server == null) {
+            return;
+        }
+        try {
+            ServerLevel level = server.getLevel(ServerLevel.OVERWORLD);
+            if (level == null) {
+                return;
+            }
+            if (state == WaveState.ACTIVE) {
+                endWave(level);
+            }
+            state = WaveState.IDLE;
+            cooldownTicks = 0;
+            tickCounter = getEffectiveIntervalTicks();
+            persistWaveData(level);
+            ZombieWavesMod.LOGGER.info("Wave skipped by operator, next wave on next tick");
+        } catch (Exception e) {
+            ZombieWavesMod.LOGGER.error("Failed to skip wave", e);
         }
     }
 
@@ -124,7 +194,7 @@ public final class WaveManager {
         if (state == WaveState.ACTIVE || state == WaveState.COOLDOWN) {
             return 0;
         }
-        return Math.max(0, ModConfig.SERVER.getWaveIntervalTicks() - tickCounter);
+        return Math.max(0, getEffectiveIntervalTicks() - tickCounter);
     }
 
     @SubscribeEvent
@@ -165,7 +235,7 @@ public final class WaveManager {
         }
 
         tickCounter++;
-        if (tickCounter >= ModConfig.SERVER.getWaveIntervalTicks()) {
+        if (tickCounter >= getEffectiveIntervalTicks()) {
             startWave(overworld);
         }
 

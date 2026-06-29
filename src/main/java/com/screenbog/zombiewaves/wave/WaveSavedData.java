@@ -16,6 +16,7 @@ public class WaveSavedData extends SavedData {
     private WaveState state = WaveState.IDLE;
     private long waveStartTick;
     private int cooldownTicks;
+    private int intervalOverrideSeconds = -1;
 
     public WaveSavedData() {
     }
@@ -35,6 +36,7 @@ public class WaveSavedData extends SavedData {
             data.tickCounter = tag.getInt("tickCounter");
             data.waveStartTick = tag.getLong("waveStartTick");
             data.cooldownTicks = tag.getInt("cooldownTicks");
+            data.intervalOverrideSeconds = tag.contains("intervalOverride") ? tag.getInt("intervalOverride") : -1;
             String stateName = tag.getString("state");
             data.state = stateName.isEmpty() ? WaveState.IDLE : WaveState.valueOf(stateName);
         } catch (Exception e) {
@@ -55,15 +57,22 @@ public class WaveSavedData extends SavedData {
         tag.putString("state", state.name());
         tag.putLong("waveStartTick", waveStartTick);
         tag.putInt("cooldownTicks", cooldownTicks);
+        tag.putInt("intervalOverride", intervalOverrideSeconds);
         return tag;
     }
 
-    public void update(int currentWave, int tickCounter, WaveState state, long waveStartTick, int cooldownTicks) {
+    public void update(int currentWave, int tickCounter, WaveState state, long waveStartTick, int cooldownTicks, int intervalOverrideSeconds) {
         this.currentWave = currentWave;
         this.tickCounter = tickCounter;
         this.state = state;
         this.waveStartTick = waveStartTick;
         this.cooldownTicks = cooldownTicks;
+        this.intervalOverrideSeconds = intervalOverrideSeconds;
+    }
+
+    public void setIntervalOverride(int seconds) {
+        this.intervalOverrideSeconds = seconds;
+        setDirty();
     }
 
     public int getCurrentWave() {
@@ -84,5 +93,9 @@ public class WaveSavedData extends SavedData {
 
     public int getCooldownTicks() {
         return cooldownTicks;
+    }
+
+    public int getIntervalOverrideSeconds() {
+        return intervalOverrideSeconds;
     }
 }

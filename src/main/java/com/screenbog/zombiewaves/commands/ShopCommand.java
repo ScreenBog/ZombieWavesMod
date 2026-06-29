@@ -4,6 +4,7 @@ import com.mojang.brigadier.CommandDispatcher;
 import com.mojang.brigadier.arguments.StringArgumentType;
 import com.mojang.brigadier.context.CommandContext;
 import com.mojang.brigadier.suggestion.SuggestionProvider;
+import com.screenbog.zombiewaves.common.MenuHelper;
 import com.screenbog.zombiewaves.shop.ShopManager;
 import net.minecraft.commands.CommandSourceStack;
 import net.minecraft.commands.Commands;
@@ -26,14 +27,32 @@ public final class ShopCommand {
 
     public static void register(CommandDispatcher<CommandSourceStack> dispatcher) {
         dispatcher.register(Commands.literal("shop")
-                .executes(ShopCommand::openShop)
+                .executes(ShopCommand::openGui)
+                .then(Commands.literal("chat")
+                        .executes(ShopCommand::openChatCatalog))
+                .then(Commands.literal("gui")
+                        .executes(ShopCommand::openGui))
                 .then(Commands.literal("buy")
                         .then(Commands.argument("item", StringArgumentType.word())
                                 .suggests(SHOP_SUGGESTIONS)
                                 .executes(ShopCommand::buyItem))));
     }
 
-    private static int openShop(CommandContext<CommandSourceStack> context) {
+    /** Открывает GUI-магазин (вкладка Shop). */
+    private static int openGui(CommandContext<CommandSourceStack> context) {
+        CommandSourceStack source = context.getSource();
+        try {
+            ServerPlayer player = source.getPlayerOrException();
+            MenuHelper.openMainMenu(player, 1);
+            return 1;
+        } catch (Exception e) {
+            source.sendFailure(Component.translatable("message.zombiewaves.players_only"));
+            return 0;
+        }
+    }
+
+    /** Старый чат-каталог для совместимости. */
+    private static int openChatCatalog(CommandContext<CommandSourceStack> context) {
         CommandSourceStack source = context.getSource();
         try {
             ServerPlayer player = source.getPlayerOrException();

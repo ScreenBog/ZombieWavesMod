@@ -1,10 +1,14 @@
 package com.screenbog.zombiewaves.shop;
 
 import com.screenbog.zombiewaves.ZombieWavesMod;
+import com.screenbog.zombiewaves.common.menu.MenuData;
 import com.screenbog.zombiewaves.data.PlayerCoinData;
 import com.screenbog.zombiewaves.integration.ModIntegrations;
+import net.minecraft.core.registries.BuiltInRegistries;
 import net.minecraft.network.chat.Component;
+import net.minecraft.resources.ResourceLocation;
 import net.minecraft.server.level.ServerPlayer;
+import net.minecraft.world.item.Item;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.item.Items;
 
@@ -49,6 +53,37 @@ public final class ShopManager {
 
     public static List<ShopItem> getItems() {
         return Collections.unmodifiableList(new ArrayList<>(ITEMS.values()));
+    }
+
+    /** Собирает данные товаров для GUI. */
+    public static List<MenuData.ShopEntry> buildShopEntries() {
+        List<MenuData.ShopEntry> entries = new ArrayList<>();
+        for (ShopItem item : ITEMS.values()) {
+            ItemStack stack = item.createStack();
+            if (stack.isEmpty()) {
+                continue;
+            }
+            entries.add(new MenuData.ShopEntry(
+                    item.getId(),
+                    BuiltInRegistries.ITEM.getKey(stack.getItem()).toString(),
+                    item.getPrice(),
+                    stack.getCount()
+            ));
+        }
+        return entries;
+    }
+
+    /** Создаёт превью-стак для клиентского GUI. */
+    public static ItemStack createPreviewStack(String itemId, int count) {
+        ResourceLocation id = ResourceLocation.tryParse(itemId);
+        if (id == null) {
+            return ItemStack.EMPTY;
+        }
+        Item item = BuiltInRegistries.ITEM.get(id);
+        if (item == null) {
+            return ItemStack.EMPTY;
+        }
+        return new ItemStack(item, count);
     }
 
     public static Optional<ShopItem> find(String id) {

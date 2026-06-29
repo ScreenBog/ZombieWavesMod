@@ -1,12 +1,15 @@
 package com.screenbog.zombiewaves.network;
 
+import com.screenbog.zombiewaves.client.ClientMenuHandler;
 import net.minecraft.network.FriendlyByteBuf;
+import net.minecraftforge.api.distmarker.Dist;
+import net.minecraftforge.fml.DistExecutor;
 import net.minecraftforge.network.NetworkEvent;
 
 import java.util.function.Supplier;
 
 /**
- * Заготовка пакета синхронизации монет для будущего GUI/HUD.
+ * Синхронизация баланса монет: сервер -> клиент.
  */
 public class SyncCoinsPacket {
     private final int coins;
@@ -29,9 +32,8 @@ public class SyncCoinsPacket {
 
     public static void handle(SyncCoinsPacket packet, Supplier<NetworkEvent.Context> contextSupplier) {
         NetworkEvent.Context context = contextSupplier.get();
-        context.enqueueWork(() -> {
-            // Клиентская обработка будет добавлена при реализации GUI-магазина.
-        });
+        context.enqueueWork(() -> DistExecutor.unsafeRunWhenOn(Dist.CLIENT, () -> () ->
+                ClientMenuHandler.setClientCoins(packet.getCoins())));
         context.setPacketHandled(true);
     }
 }
