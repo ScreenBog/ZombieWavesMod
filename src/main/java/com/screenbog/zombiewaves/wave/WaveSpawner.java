@@ -40,7 +40,6 @@ public final class WaveSpawner {
             }
 
             int quota = calculateQuota(waveNumber);
-            PlayerCoinData.setWaveQuota(player, quota);
             PlayerCoinData.setWaveKills(player, 0);
 
             int playerSpawned = spawnAroundPlayer(level, player, waveNumber, quota, waveZombieIds);
@@ -86,6 +85,14 @@ public final class WaveSpawner {
         if (spawned < count) {
             ZombieWavesMod.LOGGER.warn("Spawned only {}/{} zombies for player {}", spawned, count, player.getName().getString());
         }
+
+        // Реальная квота = сколько зомби реально заспавнилось (защита от зависания волны)
+        try {
+            PlayerCoinData.setWaveQuota(player, spawned);
+        } catch (Exception e) {
+            ZombieWavesMod.LOGGER.error("Failed to update wave quota for player {}", player.getName().getString(), e);
+        }
+
         return spawned;
     }
 
