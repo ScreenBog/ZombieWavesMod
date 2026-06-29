@@ -17,9 +17,7 @@ import net.minecraft.world.entity.ai.attributes.Attributes;
 import net.minecraft.world.entity.monster.Zombie;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.item.Items;
-import net.minecraft.world.level.Level;
 import net.minecraft.world.level.block.state.BlockState;
-import net.minecraft.world.phys.Vec3;
 
 import java.util.HashSet;
 import java.util.Set;
@@ -77,7 +75,8 @@ public final class WaveSpawner {
 
             if (level.addFreshEntity(zombie)) {
                 waveZombieIds.add(zombie.getUUID());
-                WaveZombieMarker.mark(zombie, waveNumber);
+                // Исправлено (Prompt 4): привязка зомби к владельцу
+                WaveZombieMarker.mark(zombie, waveNumber, player.getUUID());
                 spawned++;
             }
         }
@@ -86,7 +85,6 @@ public final class WaveSpawner {
             ZombieWavesMod.LOGGER.warn("Spawned only {}/{} zombies for player {}", spawned, count, player.getName().getString());
         }
 
-        // Реальная квота = сколько зомби реально заспавнилось (защита от зависания волны)
         try {
             PlayerCoinData.setWaveQuota(player, spawned);
         } catch (Exception e) {
@@ -143,7 +141,6 @@ public final class WaveSpawner {
             speed.setBaseValue(speed.getBaseValue() * speedBonus);
         }
 
-        // Небольшое усиление здоровья на высоких волнах
         if (waveNumber >= 5) {
             AttributeInstance health = zombie.getAttribute(Attributes.MAX_HEALTH);
             if (health != null) {
@@ -152,7 +149,6 @@ public final class WaveSpawner {
             }
         }
 
-        // Экипировка растёт с волной
         if (waveNumber >= 3 && zombie.getRandom().nextFloat() < 0.35F) {
             zombie.setItemSlot(EquipmentSlot.HEAD, new ItemStack(Items.IRON_HELMET));
         }
@@ -189,15 +185,5 @@ public final class WaveSpawner {
             }
         }
         return alive;
-    }
-
-    public static boolean isOverworld(ServerLevel level) {
-        return level.dimension() == Level.OVERWORLD;
-    }
-
-    public static Vec3 randomOffset(Vec3 center, int radius, net.minecraft.util.RandomSource random) {
-        double dx = (random.nextDouble() - 0.5D) * radius * 2.0D;
-        double dz = (random.nextDouble() - 0.5D) * radius * 2.0D;
-        return center.add(dx, 0.0D, dz);
     }
 }

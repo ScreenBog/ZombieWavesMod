@@ -35,6 +35,7 @@ public final class ShopManager {
         register(ShopItem.ofItem("iron_sword", Component.translatable("item.zombiewaves.shop.iron_sword"), 35, Items.IRON_SWORD, 1));
         register(ShopItem.ofItem("golden_apple", Component.translatable("item.zombiewaves.shop.golden_apple"), 50, Items.GOLDEN_APPLE, 1));
         register(ShopItem.ofItem("shield", Component.translatable("item.zombiewaves.shop.shield"), 40, Items.SHIELD, 1));
+        // torch_bundle: 32 факела в одном или нескольких стаках
         register(ShopItem.ofItem("torch_bundle", Component.translatable("item.zombiewaves.shop.torch_bundle"), 6, Items.TORCH, 32));
     }
 
@@ -74,48 +75,70 @@ public final class ShopManager {
         ));
     }
 
+    /**
+     * Исправлено (Prompt 2): сначала списание монет, затем выдача предмета.
+     */
     public static boolean tryPurchase(ServerPlayer player, String itemId) {
-        Optional<ShopItem> optional = find(itemId);
-        if (optional.isEmpty()) {
-            player.sendSystemMessage(Component.translatable("message.zombiewaves.shop_unknown", itemId));
-            return false;
-        }
+        try {
+            Optional<ShopItem> optional = find(itemId);
+            if (optional.isEmpty()) {
+                player.sendSystemMessage(Component.translatable("message.zombiewaves.shop_unknown", itemId));
+                return false;
+            }
 
-        ShopItem shopItem = optional.get();
-        int price = shopItem.getPrice();
-        int balance = PlayerCoinData.getCoins(player);
+            ShopItem shopItem = optional.get();
+            int price = shopItem.getPrice();
+            int balance = PlayerCoinData.getCoins(player);
 
-        if (balance < price) {
+            if (balance < price) {
+                player.sendSystemMessage(Component.translatable(
+                        "message.zombiewaves.shop_not_enough",
+                        price,
+                        balance
+                ));
+                return false;
+            }
+
+            ItemStack stack = shopItem.createStack();
+            if (stack.isEmpty()) {
+                player.sendSystemMessage(Component.translatable("message.zombiewaves.shop_invalid_item"));
+                ZombieWavesMod.LOGGER.warn("Shop item {} produced empty stack", shopItem.getId());
+                return false;
+            }
+
+            // 1. Списать монеты ДО выдачи предмета
+            if (!PlayerCoinData.trySpend(player, price)) {
+                player.sendSystemMessage(Component.translatable("message.zombiewaves.shop_error"));
+                ZombieWavesMod.LOGGER.error("Coin spend failed for player {} buying {}", player.getUUID(), itemId);
+                return false;
+            }
+
+            // 2. Выдать предмет (дроп при полном инвентаре, монеты не возвращаем)
+            giveItemStack(player, stack);
+
             player.sendSystemMessage(Component.translatable(
-                    "message.zombiewaves.shop_not_enough",
+                    "message.zombiewaves.shop_success",
+                    shopItem.getDisplayName(),
                     price,
-                    balance
+                    PlayerCoinData.getCoins(player)
             ));
-            return false;
-        }
-
-        ItemStack stack = shopItem.createStack();
-        if (stack.isEmpty()) {
-            player.sendSystemMessage(Component.translatable("message.zombiewaves.shop_invalid_item"));
-            ZombieWavesMod.LOGGER.warn("Shop item {} produced empty stack", shopItem.getId());
-            return false;
-        }
-
-        if (!player.addItem(stack)) {
-            player.drop(stack, false);
-        }
-
-        if (!PlayerCoinData.trySpend(player, price)) {
+            return true;
+        } catch (Exception e) {
+            ZombieWavesMod.LOGGER.error("Purchase failed for player {} item {}", player.getUUID(), itemId, e);
             player.sendSystemMessage(Component.translatable("message.zombiewaves.shop_error"));
             return false;
         }
+    }
 
-        player.sendSystemMessage(Component.translatable(
-                "message.zombiewaves.shop_success",
-                shopItem.getDisplayName(),
-                price,
-                PlayerCoinData.getCoins(player)
-        ));
-        return true;
+    /** Выдаёт стак(и) игроку; при полном инвентаре — дроп на землю. */
+    private static void giveItemStack(ServerPlayer player, ItemStack stack) {
+        ItemStack remaining = stack.copy();
+        while (!remaining.isEmpty()) {
+            int portionSize = Math.min(remaining.getMaxStackSize(), remaining.getCount());
+            ItemStack portion = remaining.split(portionSize);
+            if (!player.addItem(portion)) {
+                player.drop(portion, false);
+            }
+        }
     }
 }

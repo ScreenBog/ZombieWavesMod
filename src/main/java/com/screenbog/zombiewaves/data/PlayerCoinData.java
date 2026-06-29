@@ -1,6 +1,7 @@
 package com.screenbog.zombiewaves.data;
 
 import com.screenbog.zombiewaves.ZombieWavesMod;
+import com.screenbog.zombiewaves.network.ModNetwork;
 import net.minecraft.nbt.CompoundTag;
 import net.minecraft.network.chat.Component;
 import net.minecraft.server.level.ServerPlayer;
@@ -35,6 +36,7 @@ public final class PlayerCoinData {
 
     public static void setCoins(Player player, int amount) {
         getRoot(player).putInt(COINS, Math.max(0, amount));
+        syncBalance(player);
     }
 
     public static void addCoins(Player player, int amount) {
@@ -52,7 +54,8 @@ public final class PlayerCoinData {
         if (current < amount) {
             return false;
         }
-        setCoins(player, current - amount);
+        getRoot(player).putInt(COINS, current - amount);
+        syncBalance(player);
         return true;
     }
 
@@ -104,10 +107,43 @@ public final class PlayerCoinData {
         }
     }
 
+    /**
+     * Исправлено (Prompt 5): валидация и загрузка данных при входе игрока.
+     */
+    public static void validateAndLoad(Player player) {
+        try {
+            CompoundTag persistent = player.getPersistentData();
+            if (!persistent.contains(ROOT)) {
+                persistent.put(ROOT, new CompoundTag());
+                getRoot(player).putInt(COINS, 0);
+                ZombieWavesMod.LOGGER.info("Initialized coin data for player {}", player.getUUID());
+            }
+
+            int coins = getCoins(player);
+            if (coins < 0) {
+                getRoot(player).putInt(COINS, 0);
+                ZombieWavesMod.LOGGER.warn("Reset negative coin balance for player {}", player.getUUID());
+                coins = 0;
+            }
+
+            ZombieWavesMod.LOGGER.info("Loaded coin data for player {}: {} coins", player.getUUID(), coins);
+            syncBalance(player);
+        } catch (Exception e) {
+            ZombieWavesMod.LOGGER.error("Failed to validate coin data for player {}", player.getUUID(), e);
+        }
+    }
+
     public static void notifyCoins(ServerPlayer player) {
         player.sendSystemMessage(Component.translatable(
                 "message.zombiewaves.coins_balance",
                 getCoins(player)
         ));
+    }
+
+    /** Синхронизация баланса на клиент после каждого изменения (Prompt 6). */
+    private static void syncBalance(Player player) {
+        if (player instanceof ServerPlayer serverPlayer) {
+            ModNetwork.sendCoinsToClient(serverPlayer, getCoins(player));
+        }
     }
 }

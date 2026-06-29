@@ -25,10 +25,13 @@ public final class WaveManager {
     private int tickCounter = 0;
     private int currentWave = 0;
     private long waveStartTick = 0L;
+    private int cooldownTicks = 0;
     private final Set<UUID> activeWaveZombies = new HashSet<>();
 
     /** Таймаут волны в тиках (1200 = 60 секунд). */
     private static final long WAVE_TIMEOUT_TICKS = 1200L;
+    /** Пауза после волны (100 тиков = 5 секунд). */
+    private static final int COOLDOWN_DURATION_TICKS = 100;
 
     private WaveManager() {
     }
@@ -37,20 +40,76 @@ public final class WaveManager {
         return INSTANCE;
     }
 
+    /**
+     * Исправлено (Prompt 3): загрузка глобального состояния волн из SavedData.
+     */
     public void bindServer(MinecraftServer server) {
-        this.server = server;
+        try {
+            this.server = server;
+            this.activeWaveZombies.clear();
+
+            ServerLevel overworld = server.getLevel(ServerLevel.OVERWORLD);
+            if (overworld != null) {
+                loadWaveData(overworld);
+            } else {
+                resetToDefaults();
+            }
+
+            ZombieWavesMod.LOGGER.info(
+                    "WaveManager ready. Wave={}, state={}, tickCounter={}, interval={}s",
+                    currentWave, state, tickCounter, ModConfig.SERVER.waveIntervalSeconds.get()
+            );
+        } catch (Exception e) {
+            ZombieWavesMod.LOGGER.error("Failed to bind wave manager", e);
+            resetToDefaults();
+        }
+    }
+
+    /**
+     * Исправлено (Prompt 3): сохранение глобального состояния при остановке сервера.
+     */
+    public void unbindServer() {
+        try {
+            if (server != null) {
+                ServerLevel overworld = server.getLevel(ServerLevel.OVERWORLD);
+                if (overworld != null) {
+                    persistWaveData(overworld);
+                }
+            }
+        } catch (Exception e) {
+            ZombieWavesMod.LOGGER.error("Failed to save wave data on unbind", e);
+        } finally {
+            this.server = null;
+            this.activeWaveZombies.clear();
+        }
+    }
+
+    private void resetToDefaults() {
         this.state = WaveState.IDLE;
         this.tickCounter = 0;
         this.currentWave = 0;
         this.waveStartTick = 0L;
-        this.activeWaveZombies.clear();
-        ZombieWavesMod.LOGGER.info("WaveManager ready. Interval: {}s", ModConfig.SERVER.waveIntervalSeconds.get());
+        this.cooldownTicks = 0;
     }
 
-    public void unbindServer() {
-        this.server = null;
-        this.activeWaveZombies.clear();
-        this.state = WaveState.IDLE;
+    private void loadWaveData(ServerLevel level) {
+        WaveSavedData saved = WaveSavedData.get(level);
+        this.currentWave = saved.getCurrentWave();
+        this.tickCounter = saved.getTickCounter();
+        this.state = saved.getState();
+        this.waveStartTick = saved.getWaveStartTick();
+        this.cooldownTicks = saved.getCooldownTicks();
+        ZombieWavesMod.LOGGER.info("Restored wave state: wave={}, state={}, ticks={}", currentWave, state, tickCounter);
+    }
+
+    private void persistWaveData(ServerLevel level) {
+        try {
+            WaveSavedData saved = WaveSavedData.get(level);
+            saved.update(currentWave, tickCounter, state, waveStartTick, cooldownTicks);
+            saved.setDirty();
+        } catch (Exception e) {
+            ZombieWavesMod.LOGGER.error("Failed to persist wave data", e);
+        }
     }
 
     public int getCurrentWave() {
@@ -62,7 +121,7 @@ public final class WaveManager {
     }
 
     public int getTicksUntilNextWave() {
-        if (state == WaveState.ACTIVE) {
+        if (state == WaveState.ACTIVE || state == WaveState.COOLDOWN) {
             return 0;
         }
         return Math.max(0, ModConfig.SERVER.getWaveIntervalTicks() - tickCounter);
@@ -87,8 +146,21 @@ public final class WaveManager {
             return;
         }
 
+        // Исправлено (Prompt 7): реальная пауза COOLDOWN 5 секунд
+        if (state == WaveState.COOLDOWN) {
+            cooldownTicks--;
+            if (cooldownTicks <= 0) {
+                state = WaveState.IDLE;
+                tickCounter = 0;
+                ZombieWavesMod.LOGGER.debug("Wave cooldown finished, returning to IDLE");
+            }
+            persistWaveData(overworld);
+            return;
+        }
+
         if (state == WaveState.ACTIVE) {
             handleActiveWave(overworld);
+            persistWaveData(overworld);
             return;
         }
 
@@ -96,12 +168,15 @@ public final class WaveManager {
         if (tickCounter >= ModConfig.SERVER.getWaveIntervalTicks()) {
             startWave(overworld);
         }
+
+        persistWaveData(overworld);
     }
 
     private void startWave(ServerLevel level) {
         try {
             currentWave++;
             tickCounter = 0;
+            cooldownTicks = 0;
             state = WaveState.ACTIVE;
             activeWaveZombies.clear();
             waveStartTick = server.getTickCount();
@@ -110,9 +185,11 @@ public final class WaveManager {
             WaveSpawner.broadcastWaveStart(level, currentWave, spawned);
 
             ZombieWavesMod.LOGGER.info("Wave {} started. Spawned {} zombies.", currentWave, spawned);
+            persistWaveData(level);
         } catch (Exception e) {
             ZombieWavesMod.LOGGER.error("Failed to start wave {}", currentWave, e);
             state = WaveState.IDLE;
+            persistWaveData(level);
         }
     }
 
@@ -134,14 +211,12 @@ public final class WaveManager {
 
             long currentTick = server.getTickCount();
 
-            // Таймаут: зомби исчезли, но волна не завершилась штатно
             if (activeWaveZombies.isEmpty() && (currentTick - waveStartTick > WAVE_TIMEOUT_TICKS)) {
                 ZombieWavesMod.LOGGER.warn("Wave forced end due to timeout");
                 endWave(level);
                 return;
             }
 
-            // Штатное завершение: все игроки выполнили квоту (даже если зомби ещё живы)
             if (allPlayersCleared) {
                 endWave(level);
             }
@@ -153,20 +228,23 @@ public final class WaveManager {
     private void endWave(ServerLevel level) {
         try {
             state = WaveState.COOLDOWN;
+            cooldownTicks = COOLDOWN_DURATION_TICKS;
             tickCounter = 0;
+            waveStartTick = 0L;
             WaveSpawner.broadcastWaveEnd(level, currentWave);
 
             for (ServerPlayer player : level.players()) {
                 PlayerCoinData.resetWaveProgress(player);
             }
 
-            state = WaveState.IDLE;
-            waveStartTick = 0L;
-            ZombieWavesMod.LOGGER.info("Wave {} ended.", currentWave);
+            ZombieWavesMod.LOGGER.info("Wave {} ended. Cooldown {} ticks.", currentWave, cooldownTicks);
+            persistWaveData(level);
         } catch (Exception e) {
             ZombieWavesMod.LOGGER.error("Failed to end wave {}", currentWave, e);
             state = WaveState.IDLE;
+            cooldownTicks = 0;
             waveStartTick = 0L;
+            persistWaveData(level);
         }
     }
 

@@ -3,7 +3,6 @@ package com.screenbog.zombiewaves;
 import com.screenbog.zombiewaves.commands.CoinsCommand;
 import com.screenbog.zombiewaves.commands.ShopCommand;
 import com.screenbog.zombiewaves.config.ModConfig;
-import com.screenbog.zombiewaves.events.ModEvents;
 import com.screenbog.zombiewaves.integration.ModIntegrations;
 import com.screenbog.zombiewaves.network.ModNetwork;
 import com.screenbog.zombiewaves.registry.ModItems;
@@ -39,7 +38,7 @@ public class ZombieWavesMod {
 
         modEventBus.addListener(this::commonSetup);
 
-        MinecraftForge.EVENT_BUS.register(ModEvents.class);
+        // ModEvents регистрируется автоматически через @Mod.EventBusSubscriber
         MinecraftForge.EVENT_BUS.register(this);
     }
 
