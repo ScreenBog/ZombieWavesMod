@@ -5,6 +5,7 @@ import com.screenbog.zombiewaves.common.menu.MenuAction;
 import com.screenbog.zombiewaves.common.menu.MenuData;
 import com.screenbog.zombiewaves.data.PlayerCoinData;
 import net.minecraft.resources.ResourceLocation;
+import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraftforge.network.NetworkDirection;
 import net.minecraftforge.network.NetworkRegistry;
@@ -77,6 +78,17 @@ public final class ModNetwork {
             CHANNEL.send(PacketDistributor.PLAYER.with(() -> player), new SyncMenuDataPacket(MenuData.fromPlayer(player)));
         } catch (Exception e) {
             ZombieWavesMod.LOGGER.error("Failed to send menu data to player {}", player.getUUID(), e);
+        }
+    }
+
+    /** Обновляет GUI у всех игроков на сервере (после endWave / skip). */
+    public static void broadcastMenuData(ServerLevel level) {
+        try {
+            for (ServerPlayer player : level.players()) {
+                sendMenuData(player);
+            }
+        } catch (Exception e) {
+            ZombieWavesMod.LOGGER.error("Failed to broadcast menu data", e);
         }
     }
 

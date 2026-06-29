@@ -3,6 +3,7 @@ package com.screenbog.zombiewaves.wave;
 import com.screenbog.zombiewaves.ZombieWavesMod;
 import com.screenbog.zombiewaves.config.ModConfig;
 import com.screenbog.zombiewaves.data.PlayerCoinData;
+import com.screenbog.zombiewaves.network.ModNetwork;
 import net.minecraft.network.chat.Component;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.level.ServerLevel;
@@ -29,6 +30,8 @@ public final class WaveManager {
     private int intervalOverrideSeconds = -1;
     private final Set<UUID> activeWaveZombies = new HashSet<>();
 
+    /** Минимальная длительность волны (600 тиков = 30 секунд). */
+    private static final long WAVE_MIN_DURATION_TICKS = 600L;
     /** Таймаут волны в тиках (1200 = 60 секунд). */
     private static final long WAVE_TIMEOUT_TICKS = 1200L;
     /** Пауза после волны (100 тиков = 5 секунд). */
@@ -41,9 +44,6 @@ public final class WaveManager {
         return INSTANCE;
     }
 
-    /**
-     * Исправлено (Prompt 3): загрузка глобального состояния волн из SavedData.
-     */
     public void bindServer(MinecraftServer server) {
         try {
             this.server = server;
@@ -58,7 +58,7 @@ public final class WaveManager {
 
             ZombieWavesMod.LOGGER.info(
                     "WaveManager ready. Wave={}, state={}, tickCounter={}, interval={}s",
-                    currentWave, state, tickCounter, ModConfig.SERVER.waveIntervalSeconds.get()
+                    currentWave, state, tickCounter, getEffectiveIntervalSeconds()
             );
         } catch (Exception e) {
             ZombieWavesMod.LOGGER.error("Failed to bind wave manager", e);
@@ -66,9 +66,6 @@ public final class WaveManager {
         }
     }
 
-    /**
-     * Исправлено (Prompt 3): сохранение глобального состояния при остановке сервера.
-     */
     public void unbindServer() {
         try {
             if (server != null) {
@@ -150,16 +147,24 @@ public final class WaveManager {
         }
     }
 
+    /** OP: принудительно завершить текущую волну (с бонусами за зачистку). */
     public void forceEndCurrentWave() {
         if (state != WaveState.ACTIVE || server == null) {
             return;
         }
-        ServerLevel level = server.getLevel(ServerLevel.OVERWORLD);
-        if (level != null) {
-            endWave(level);
+        try {
+            ServerLevel level = server.getLevel(ServerLevel.OVERWORLD);
+            if (level != null) {
+                endWave(level, false);
+            }
+        } catch (Exception e) {
+            ZombieWavesMod.LOGGER.error("Failed to force end wave", e);
         }
     }
 
+    /**
+     * OP: пропустить волну — завершить без бонусов, сбросить таймер, уведомить всех.
+     */
     public void skipWave() {
         if (server == null) {
             return;
@@ -169,14 +174,30 @@ public final class WaveManager {
             if (level == null) {
                 return;
             }
+
             if (state == WaveState.ACTIVE) {
-                endWave(level);
+                // Завершаем без бонусов, без COOLDOWN
+                activeWaveZombies.clear();
+                waveStartTick = 0L;
+                for (ServerPlayer player : level.players()) {
+                    PlayerCoinData.resetWaveProgress(player);
+                }
+                ZombieWavesMod.LOGGER.info("Active wave {} skipped by operator", currentWave);
             }
+
             state = WaveState.IDLE;
             cooldownTicks = 0;
-            tickCounter = getEffectiveIntervalTicks();
+            tickCounter = 0;
+            waveStartTick = 0L;
+            activeWaveZombies.clear();
             persistWaveData(level);
-            ZombieWavesMod.LOGGER.info("Wave skipped by operator, next wave on next tick");
+
+            for (ServerPlayer player : level.players()) {
+                player.sendSystemMessage(Component.translatable("message.zombiewaves.wave_skipped_admin"));
+            }
+
+            ModNetwork.broadcastMenuData(level);
+            ZombieWavesMod.LOGGER.info("Wave skipped by operator, timer reset");
         } catch (Exception e) {
             ZombieWavesMod.LOGGER.error("Failed to skip wave", e);
         }
@@ -216,7 +237,6 @@ public final class WaveManager {
             return;
         }
 
-        // Исправлено (Prompt 7): реальная пауза COOLDOWN 5 секунд
         if (state == WaveState.COOLDOWN) {
             cooldownTicks--;
             if (cooldownTicks <= 0) {
@@ -247,18 +267,30 @@ public final class WaveManager {
             currentWave++;
             tickCounter = 0;
             cooldownTicks = 0;
-            state = WaveState.ACTIVE;
             activeWaveZombies.clear();
-            waveStartTick = server.getTickCount();
+            waveStartTick = 0L;
 
             int spawned = WaveSpawner.spawnWaveForPlayers(level, currentWave, activeWaveZombies);
-            WaveSpawner.broadcastWaveStart(level, currentWave, spawned);
 
+            // Волна активна только если реально заспавнились зомби
+            if (spawned <= 0) {
+                currentWave--;
+                state = WaveState.IDLE;
+                ZombieWavesMod.LOGGER.warn("Wave aborted: no zombies spawned for wave {}", currentWave + 1);
+                persistWaveData(level);
+                return;
+            }
+
+            state = WaveState.ACTIVE;
+            waveStartTick = server.getTickCount();
+
+            WaveSpawner.broadcastWaveStart(level, currentWave, spawned);
             ZombieWavesMod.LOGGER.info("Wave {} started. Spawned {} zombies.", currentWave, spawned);
             persistWaveData(level);
         } catch (Exception e) {
             ZombieWavesMod.LOGGER.error("Failed to start wave {}", currentWave, e);
             state = WaveState.IDLE;
+            waveStartTick = 0L;
             persistWaveData(level);
         }
     }
@@ -267,54 +299,125 @@ public final class WaveManager {
         try {
             activeWaveZombies.retainAll(WaveSpawner.filterAliveWaveZombies(level, activeWaveZombies));
 
+            boolean hasEligiblePlayers = false;
             boolean allPlayersCleared = true;
+
             for (ServerPlayer player : level.players()) {
                 if (player.isCreative() || player.isSpectator()) {
                     continue;
                 }
                 int quota = PlayerCoinData.getWaveQuota(player);
                 int kills = PlayerCoinData.getWaveKills(player);
-                if (quota > 0 && kills < quota) {
-                    allPlayersCleared = false;
+
+                if (quota > 0) {
+                    hasEligiblePlayers = true;
+                    if (kills < quota) {
+                        allPlayersCleared = false;
+                    }
                 }
             }
 
             long currentTick = server.getTickCount();
+            long elapsed = currentTick - waveStartTick;
+            boolean zombiesEmpty = activeWaveZombies.isEmpty();
+            boolean minDurationPassed = elapsed >= WAVE_MIN_DURATION_TICKS;
 
-            if (activeWaveZombies.isEmpty() && (currentTick - waveStartTick > WAVE_TIMEOUT_TICKS)) {
-                ZombieWavesMod.LOGGER.warn("Wave forced end due to timeout");
-                endWave(level);
+            // Нет игроков с квотой — ждём минимум 30 сек, затем отменяем волну
+            if (!hasEligiblePlayers) {
+                if (minDurationPassed) {
+                    ZombieWavesMod.LOGGER.warn("Wave {} ended: no players with spawn quota", currentWave);
+                    endWave(level, false);
+                }
                 return;
             }
 
-            if (allPlayersCleared) {
-                endWave(level);
+            // Таймаут: зомби исчезли, прошло 60+ сек
+            if (zombiesEmpty && elapsed >= WAVE_TIMEOUT_TICKS) {
+                ZombieWavesMod.LOGGER.warn("Wave forced end due to timeout");
+                endWave(level, false);
+                return;
+            }
+
+            // Штатное завершение: все выполнили квоту, зомби мертвы, минимум 30 сек прошло
+            if (allPlayersCleared && zombiesEmpty && minDurationPassed) {
+                endWave(level, false);
             }
         } catch (Exception e) {
             ZombieWavesMod.LOGGER.error("Failed to handle active wave {}", currentWave, e);
         }
     }
 
-    private void endWave(ServerLevel level) {
+    /**
+     * Завершает волну. При skipped=false выдаёт бонус за зачистку всем, кто выполнил квоту.
+     */
+    private void endWave(ServerLevel level, boolean skipped) {
         try {
+            if (!skipped) {
+                distributeWaveClearBonuses(level);
+            }
+
             state = WaveState.COOLDOWN;
             cooldownTicks = COOLDOWN_DURATION_TICKS;
             tickCounter = 0;
             waveStartTick = 0L;
-            WaveSpawner.broadcastWaveEnd(level, currentWave);
+            activeWaveZombies.clear();
+
+            if (!skipped) {
+                WaveSpawner.broadcastWaveEnd(level, currentWave);
+            }
 
             for (ServerPlayer player : level.players()) {
                 PlayerCoinData.resetWaveProgress(player);
             }
 
-            ZombieWavesMod.LOGGER.info("Wave {} ended. Cooldown {} ticks.", currentWave, cooldownTicks);
+            ZombieWavesMod.LOGGER.info("Wave {} ended. Cooldown {} ticks. skipped={}", currentWave, cooldownTicks, skipped);
             persistWaveData(level);
+            ModNetwork.broadcastMenuData(level);
         } catch (Exception e) {
             ZombieWavesMod.LOGGER.error("Failed to end wave {}", currentWave, e);
             state = WaveState.IDLE;
             cooldownTicks = 0;
             waveStartTick = 0L;
             persistWaveData(level);
+        }
+    }
+
+    /**
+     * Бонус за полную зачистку волны — выдаётся при штатном завершении.
+     */
+    private void distributeWaveClearBonuses(ServerLevel level) {
+        try {
+            int bonus = ModConfig.SERVER.waveClearBonus.get();
+            if (bonus <= 0) {
+                return;
+            }
+
+            for (ServerPlayer player : level.players()) {
+                if (player.isCreative() || player.isSpectator()) {
+                    continue;
+                }
+
+                int quota = PlayerCoinData.getWaveQuota(player);
+                int kills = PlayerCoinData.getWaveKills(player);
+
+                if (quota > 0 && kills >= quota) {
+                    PlayerCoinData.addCoins(player, bonus);
+                    PlayerCoinData.incrementWavesCleared(player);
+                    ModNetwork.sendCoinsToClient(player, PlayerCoinData.getCoins(player));
+
+                    player.sendSystemMessage(Component.translatable(
+                            "message.zombiewaves.wave_clear_bonus_gold",
+                            bonus
+                    ));
+
+                    ZombieWavesMod.LOGGER.info(
+                            "Wave clear bonus {} given to player {} ({}/{})",
+                            bonus, player.getUUID(), kills, quota
+                    );
+                }
+            }
+        } catch (Exception e) {
+            ZombieWavesMod.LOGGER.error("Failed to distribute wave clear bonuses", e);
         }
     }
 

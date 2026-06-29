@@ -57,8 +57,8 @@ public final class MenuHelper {
                         player.sendSystemMessage(Component.translatable("gui.zombiewaves.op_only"));
                         return;
                     }
+                    // skipWave() уведомляет всех игроков и обновляет GUI
                     WaveManager.get().skipWave();
-                    player.sendSystemMessage(Component.translatable("gui.zombiewaves.wave_skipped"));
                 }
                 case END_WAVE -> {
                     if (!player.hasPermissions(2)) {

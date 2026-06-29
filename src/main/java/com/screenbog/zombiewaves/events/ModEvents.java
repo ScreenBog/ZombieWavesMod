@@ -57,24 +57,22 @@ public final class ModEvents {
             int quota = PlayerCoinData.getWaveQuota(killer);
             int kills = PlayerCoinData.getWaveKills(killer);
 
-            if (quota > 0 && kills >= quota) {
-                int bonus = ModConfig.SERVER.waveClearBonus.get();
-                PlayerCoinData.addCoins(killer, bonus);
-                PlayerCoinData.incrementWavesCleared(killer);
-                PlayerCoinData.setWaveQuota(killer, 0);
-
-                killer.sendSystemMessage(Component.translatable(
-                        "message.zombiewaves.wave_clear_bonus",
-                        bonus,
-                        PlayerCoinData.getCoins(killer)
-                ));
-            } else if (killer instanceof ServerPlayer serverPlayer) {
+            // Бонус за зачистку выдаётся в WaveManager.endWave(), здесь только награда за килл
+            if (killer instanceof ServerPlayer serverPlayer) {
                 serverPlayer.sendSystemMessage(Component.translatable(
                         "message.zombiewaves.kill_reward",
                         reward,
                         kills,
                         Math.max(quota, 1)
                 ), true);
+
+                if (quota > 0 && kills >= quota) {
+                    serverPlayer.sendSystemMessage(Component.translatable(
+                            "message.zombiewaves.quota_complete",
+                            kills,
+                            quota
+                    ));
+                }
             }
         } catch (Exception e) {
             ZombieWavesMod.LOGGER.error("Failed to process zombie kill reward", e);
